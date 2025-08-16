@@ -1,122 +1,141 @@
 import os
 from flask import Flask, request, jsonify, send_from_directory, render_template
+from werkzeug.exceptions import HTTPException
 import grok  # uses your existing pipeline functions
 
 app = Flask(__name__)
+app.secret_key = "dev"  # local use only
 
 # Always use the same OUTPUT_DIR as grok.py
 OUTPUT_DIR = grok.OUTPUT_DIR
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 
 def _list_videos():
-    files = []
-    for name in sorted(os.listdir(OUTPUT_DIR)):
-        if name.lower().endswith(".mp4"):
-            files.append(name)
+    if not os.path.isdir(OUTPUT_DIR):
+        return []
+    files = [f for f in os.listdir(OUTPUT_DIR) if f.lower().endswith(".mp4")]
+    files.sort(key=lambda name: os.path.getmtime(os.path.join(OUTPUT_DIR, name)), reverse=True)
     return files
+
+@app.errorhandler(Exception)
+def _json_errors(e):
+    # Ensure every unexpected error returns JSON (not HTML), so the front-end can show a helpful message
+    code = 500
+    if isinstance(e, HTTPException):
+        code = e.code
+    return jsonify(ok=False, error=e.__class__.__name__, detail=str(e)), code
 
 @app.route("/")
 def index():
-    # Prefer live values from grok module; fall back to environment, then empty.
-    default_image = (getattr(grok, "DEFAULT_IMAGE_URL", None)
-                     or os.getenv("DEFAULT_IMAGE_URL", ""))
-    default_audio = (getattr(grok, "DEFAULT_AUDIO_URL", None)
-                     or os.getenv("DEFAULT_AUDIO_URL", ""))
-
     defaults = {
-        "image_url": default_image,
-        "audio_url": default_audio,
+        "image_url": getattr(grok, "DEFAULT_IMAGE_URL", os.getenv("DEFAULT_IMAGE_URL", "")),
+        "audio_url": getattr(grok, "DEFAULT_AUDIO_URL", os.getenv("DEFAULT_AUDIO_URL", "")),
         "output_dir": OUTPUT_DIR,
     }
     return render_template("index.html", defaults=defaults, videos=_list_videos())
 
 @app.route("/media/<path:filename>")
 def media(filename):
-    # serve from OUTPUT_DIR so you can play the videos in-browser
     return send_from_directory(OUTPUT_DIR, filename)
 
 @app.post("/tts")
 def tts():
-    data = request.get_json(force=True)
-    text = data.get("text", "").strip()
+    data = request.get_json(force=True, silent=True) or {}
+    text = (data.get("text") or "").strip()
     upload = bool(data.get("upload", True))
-    voice_id = grok.load_voice_id()
     if not text:
-        return jsonify(ok=False, error="Text is empty"), 400
-    if not voice_id:
-        return jsonify(ok=False, error="No voice_id; run Option 6 in CLI once."), 400
+        return jsonify(ok=False, error="BadRequest", detail="Text is empty"), 400
 
-    mp3_path = grok.generate_tts(voice_id, text)
+    voice_id = grok.load_voice_id()
+    if not voice_id:
+        return jsonify(ok=False, error="NoVoiceId", detail="Put voice_id.txt next to grok.py or run CLI Option 6"), 400
+
+    try:
+        mp3_path = grok.generate_tts(voice_id, text)
+    except Exception as e:
+        return jsonify(ok=False, error="TTSException", detail=str(e)), 500
+
+    if not mp3_path:
+        return jsonify(ok=False, error="TTSFailed", detail="generate_tts returned None"), 500
+
     url = None
-    if mp3_path and upload:
-        url = grok.upload_output_mp3_and_set_default()
-        # Propagate to the process env so a page reload reflects the new default
-        if url:
-            os.environ["DEFAULT_AUDIO_URL"] = url
-    return jsonify(ok=bool(mp3_path), mp3=mp3_path, uploaded_url=url)
+    if upload:
+        try:
+            url = grok.upload_output_mp3_and_set_default()
+        except Exception as e:
+            # Do not fail the whole request just because upload failed
+            url = None
+    return jsonify(ok=True, mp3=mp3_path, uploaded_url=url)
 
 @app.post("/animate")
 def animate():
-    data = request.get_json(force=True)
-    # Prefer live defaults from grok for better UX
-    default_image = (getattr(grok, "DEFAULT_IMAGE_URL", None)
-                     or os.getenv("DEFAULT_IMAGE_URL", ""))
-    image_url = (data.get("image_url") or "").strip() or default_image
-
-    # If client sends empty audio_url, that means "use local output.mp3" (fallback)
+    data = request.get_json(force=True, silent=True) or {}
+    image_url = (data.get("image_url") or "").strip() or getattr(grok, "DEFAULT_IMAGE_URL", os.getenv("DEFAULT_IMAGE_URL", ""))
+    # If audio_url == "", grok.animate_avatar_did will force local output.mp3 / FFmpeg fallback
     audio_url = (data.get("audio_url") or "").strip()
+    try:
+        result = grok.animate_avatar_did(image_url, audio_url)
+    except Exception as e:
+        return jsonify(ok=False, error="AnimateException", detail=str(e)), 500
 
-    local_path_or_url = grok.animate_avatar_did(image_url, audio_url)
-    ok = bool(local_path_or_url)
-    # If a local file was created, expose basename so UI can play it
+    ok = bool(result)
     basename = None
-    if ok and isinstance(local_path_or_url, str) and os.path.exists(local_path_or_url):
-        basename = os.path.basename(local_path_or_url)
-    return jsonify(ok=ok, result=local_path_or_url, basename=basename)
+    if ok and isinstance(result, str) and os.path.exists(result):
+        basename = os.path.basename(result)
+    return jsonify(ok=ok, result=result, basename=basename)
 
 @app.post("/full")
 def full():
-    data = request.get_json(force=True)
-    question = data.get("question", "").strip()
+    data = request.get_json(force=True, silent=True) or {}
+    question = (data.get("question") or "").strip()
     upload = bool(data.get("upload", True))
-
-    default_image = (getattr(grok, "DEFAULT_IMAGE_URL", None)
-                     or os.getenv("DEFAULT_IMAGE_URL", ""))
-    image_url = (data.get("image_url") or "").strip() or default_image
+    image_url = (data.get("image_url") or "").strip() or getattr(grok, "DEFAULT_IMAGE_URL", os.getenv("DEFAULT_IMAGE_URL", ""))
 
     if not question:
-        return jsonify(ok=False, error="Question is empty"), 400
+        return jsonify(ok=False, error="BadRequest", detail="Question is empty"), 400
 
     # Persona answer
-    answer = grok.chat_like_me(question)
+    try:
+        answer = grok.chat_like_me(question)
+    except Exception as e:
+        return jsonify(ok=False, error="GroqException", detail=str(e)), 500
     if not answer:
-        return jsonify(ok=False, error="No answer generated"), 500
+        return jsonify(ok=False, error="NoAnswer", detail="No answer from chat_like_me"), 500
 
     # TTS
     voice_id = grok.load_voice_id()
     if not voice_id:
-        return jsonify(ok=False, error="No voice_id; run Option 6 in CLI once."), 400
-    mp3_path = grok.generate_tts(voice_id, answer)
+        return jsonify(ok=False, error="NoVoiceId", detail="Put voice_id.txt next to grok.py or run CLI Option 6"), 400
+    try:
+        mp3_path = grok.generate_tts(voice_id, answer)
+    except Exception as e:
+        return jsonify(ok=False, error="TTSException", detail=str(e)), 500
     if not mp3_path:
-        return jsonify(ok=False, error="TTS failed"), 500
+        return jsonify(ok=False, error="TTSFailed", detail="generate_tts returned None"), 500
 
+    # Optional upload (sets grok.DEFAULT_AUDIO_URL if successful)
+    audio_url = ""
     if upload:
-        url = grok.upload_output_mp3_and_set_default()
-        if url:
-            os.environ["DEFAULT_AUDIO_URL"] = url
-        audio_url = url or ""
-    else:
-        audio_url = ""  # force local fallback with output.mp3
+        try:
+            grok.upload_output_mp3_and_set_default()
+            audio_url = getattr(grok, "DEFAULT_AUDIO_URL", os.getenv("DEFAULT_AUDIO_URL", ""))
+        except Exception as e:
+            # Keep going without upload
+            audio_url = ""
 
     # Animate
-    video_result = grok.animate_avatar_did(image_url, audio_url)
+    try:
+        video_result = grok.animate_avatar_did(image_url, audio_url)
+    except Exception as e:
+        return jsonify(ok=False, error="AnimateException", detail=str(e)), 500
+
     basename = os.path.basename(video_result) if (isinstance(video_result, str) and os.path.exists(video_result)) else None
 
-    return jsonify(ok=bool(video_result), question=question, answer=answer, mp3=mp3_path,
-                   result=video_result, basename=basename)
+    return jsonify(ok=bool(video_result), question=question, answer=answer,
+                   mp3=mp3_path, result=video_result, basename=basename)
 
 if __name__ == "__main__":
-    # Run on localhost:5000
     app.run(debug=True)
+
 
 
