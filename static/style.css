@@ -1,18 +1,69 @@
-:root { --bg:#0f172a; --panel:#111827; --border:#1f2937; --text:#e5e7eb; --muted:#9ca3af; }
+/* static/style.css */
+/* Minimal, readable UI: cards, buttons, responsive grid. */
+
+:root {
+  --bg: #0f172a;       /* slate-900 */
+  --panel: #111827;    /* gray-900 */
+  --muted: #94a3b8;    /* slate-400 */
+  --text: #e5e7eb;     /* gray-200 */
+  --accent: #2563eb;   /* blue-600 */
+  --accent-2: #1d4ed8; /* blue-700 */
+  --border: #1f2937;   /* gray-800 */
+}
+
 * { box-sizing: border-box; }
-body { margin:0; font-family: system-ui, Segoe UI, Roboto, sans-serif; background:var(--bg); color:var(--text); }
-.topbar { display:flex; align-items:center; gap:12px; padding:12px 16px; border-bottom:1px solid var(--border); background:#0b1220; }
-.flag { width:30px; }
-.brand { display:flex; align-items:center; gap:10px; }
-.container { max-width:1100px; margin:18px auto; padding:0 16px; display:grid; grid-template-columns:repeat(auto-fill,minmax(360px,1fr)); gap:16px; }
-.card { background:var(--panel); border:1px solid var(--border); border-radius:12px; padding:12px; }
-h1,h2 { margin:0 0 8px 0; font-weight:600; }
-.row { display:flex; align-items:center; gap:8px; margin:8px 0; }
-textarea, input[type="text"] { width:100%; background:#0f172a; color:var(--text); border:1px solid var(--border); border-radius:8px; padding:8px; }
-.btn { background:#1f2937; border:1px solid var(--border); border-radius:10px; padding:10px 14px; color:var(--text); cursor:pointer; }
-.btn:hover { background:#253043; }
-.note { color:var(--muted); font-size:14px; }
-.videos { display:grid; grid-template-columns:1fr; gap:12px; }
-.vid .name { font-size:14px; color:var(--muted); margin-bottom:6px; }
-video { width:100%; border-radius:10px; background:#000; }
-.log { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size:13px; color:var(--muted); white-space:pre-wrap; max-height:200px; overflow:auto; border:1px solid var(--border); border-radius:8px; padding:8px; background:#0f172a; }
+html, body {
+  margin: 0; padding: 0; background: var(--bg); color: var(--text);
+  font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Ubuntu, Cantarell, Noto Sans, "Helvetica Neue", Arial;
+}
+
+.topbar {
+  border-bottom: 1px solid var(--border);
+  padding: 14px 16px;
+  background: #0b1220;
+}
+.topbar .brand { display: flex; align-items: center; gap: 10px; }
+.topbar h1 { font-size: 20px; margin: 0; font-weight: 600; letter-spacing: .3px; }
+.flag { width: 44px; height: auto; display: block; border-radius: 2px; }
+
+.container {
+  max-width: 1040px; margin: 20px auto; padding: 0 16px;
+  display: grid; gap: 16px;
+  grid-template-columns: repeat(12, 1fr);
+}
+
+.card {
+  grid-column: span 12;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 16px;
+}
+.card h2 { margin: 0 0 10px; font-size: 18px; }
+
+.row { margin: 10px 0; display: flex; gap: 10px; flex-wrap: wrap; }
+.row input[type="text"], .row textarea {
+  width: 100%; padding: 10px 12px; border-radius: 8px; border: 1px solid var(--border);
+  background: #0b1220; color: var(--text);
+}
+textarea { resize: vertical; }
+
+.btn {
+  background: var(--accent); border: none; color: white; padding: 10px 14px; border-radius: 8px;
+  font-weight: 600; cursor: pointer; transition: background .15s ease;
+}
+.btn:hover { background: var(--accent-2); }
+.btn[disabled] { opacity: .6; cursor: not-allowed; }
+
+.note { color: var(--muted); font-size: 13px; }
+
+.videos { display: grid; gap: 10px; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); }
+.vid { background: #0b1220; border: 1px solid var(--border); border-radius: 8px; padding: 10px; }
+.vid .name { font-size: 13px; color: var(--muted); margin-bottom: 6px; overflow-wrap: anywhere; }
+.vid video { width: 100%; height: auto; border-radius: 6px; display: block; }
+
+.log {
+  min-height: 80px; white-space: pre-wrap; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+  padding: 10px; border-radius: 8px; background: #0b1220; border: 1px solid var(--border);
+}
+
