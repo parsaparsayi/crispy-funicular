@@ -10,6 +10,7 @@
 <body>
   <div class="topbar">
     <div class="brand">
+      <!-- simple US flag block for the header -->
       <svg class="flag" viewBox="0 0 7410 3900" aria-hidden="true">
         <rect width="7410" height="3900" fill="#b22234"/>
         <g fill="#fff">
@@ -38,19 +39,20 @@
     <!-- Animate -->
     <div class="card">
       <h2>Animate (Image + Audio → MP4)</h2>
-      <div class="note" style="margin-bottom:6px;">Image URL is always used regardless of audio option.</div>
+
+      <div class="note" style="margin-bottom:6px;">Image URL is always used.</div>
       <div class="row"><input type="text" id="img_url" placeholder="Image URL (https)" value="{{ defaults.image_url }}"></div>
 
-      <div class="note" style="margin-top:6px; margin-bottom:4px;">Audio source (choose one):</div>
+      <div class="note" style="margin-top:8px;">Audio source (you may keep Default checked while forcing Local):</div>
       <div class="row">
-        <label><input type="radio" name="audio_mode" value="default" checked> Use DEFAULT_AUDIO_URL</label>
+        <label><input type="checkbox" id="aud_use_default" checked> Use DEFAULT_AUDIO_URL</label>
       </div>
       <div class="row">
-        <label><input type="radio" name="audio_mode" value="url"> Use this audio URL:</label>
+        <label for="aud_url" style="margin-right:8px;">Or custom audio URL:</label>
+        <input type="text" id="aud_url" placeholder="https://... .mp3" value="{{ defaults.audio_url }}" style="flex:1;">
       </div>
-      <div class="row"><input type="text" id="aud_url" placeholder="https://... .mp3" value="{{ defaults.audio_url }}"></div>
       <div class="row">
-        <label><input type="radio" name="audio_mode" value="local"> Use local output.mp3</label>
+        <label><input type="checkbox" id="aud_use_local"> Use local output.mp3</label>
       </div>
 
       <div class="row"><button class="btn" onclick="doAnimate()">Create Video</button></div>
@@ -90,14 +92,19 @@
   </div>
 
   <script>
-    function log(msg){ const el=document.getElementById('log'); el.textContent=(el.textContent?el.textContent+'\n':'')+'• '+msg; el.scrollTop=el.scrollHeight; }
+    function log(msg){
+      const el=document.getElementById('log');
+      el.textContent=(el.textContent?el.textContent+'\n':'')+'• '+msg;
+      el.scrollTop=el.scrollHeight;
+    }
 
     function updateAudioInputs(){
-      const mode = document.querySelector('input[name=audio_mode]:checked').value;
-      const urlBox = document.getElementById('aud_url');
-      urlBox.disabled = (mode !== 'url'); // editable only in URL mode
+      const useLocal = document.getElementById('aud_use_local').checked;
+      const urlBox   = document.getElementById('aud_url');
+      // If using local MP3, custom URL is irrelevant and disabled
+      urlBox.disabled = useLocal;
     }
-    document.querySelectorAll('input[name=audio_mode]').forEach(r => r.addEventListener('change', updateAudioInputs));
+    document.getElementById('aud_use_local').addEventListener('change', updateAudioInputs);
     window.addEventListener('DOMContentLoaded', updateAudioInputs);
 
     async function doTTS(){
@@ -105,7 +112,8 @@
       const upload = document.getElementById('tts_upload').checked;
       if(!text){ log('Enter text first.'); return; }
       log('TTS…');
-      const r = await fetch('/tts',{method:'POST',headers:{'Content-Type':'application/json'},
+      const r = await fetch('/tts',{
+        method:'POST', headers:{'Content-Type':'application/json'},
         body: JSON.stringify({text, upload})
       });
       const j = await r.json();
@@ -115,11 +123,25 @@
 
     async function doAnimate(){
       const image_url = document.getElementById('img_url').value.trim();
-      const mode = [...document.querySelectorAll('input[name=audio_mode]')].find(x=>x.checked).value;
-      const audio_url = (mode==='default') ? '{{ defaults.audio_url }}'
-                     : (mode==='url' ? document.getElementById('aud_url').value.trim() : '');
+      const useDefault = document.getElementById('aud_use_default').checked;
+      const useLocal   = document.getElementById('aud_use_local').checked;
+      const custom     = document.getElementById('aud_url').value.trim();
+
+      // precedence: local > custom URL > default
+      let audio_url = '';
+      if (useLocal) {
+        audio_url = '';                 // empty signals "use local output.mp3" to the server
+      } else if (custom) {
+        audio_url = custom;
+      } else if (useDefault) {
+        audio_url = '{{ defaults.audio_url }}';
+      } else {
+        audio_url = '{{ defaults.audio_url }}'; // safe fallback
+      }
+
       log('Animate…');
-      const r = await fetch('/animate',{method:'POST',headers:{'Content-Type':'application/json'},
+      const r = await fetch('/animate',{
+        method:'POST', headers:{'Content-Type':'application/json'},
         body: JSON.stringify({image_url, audio_url})
       });
       const j = await r.json();
@@ -137,7 +159,8 @@
       const upload = document.getElementById('qa_upload').checked;
       if(!question){ log('Enter a question first.'); return; }
       log('Full pipeline…');
-      const r = await fetch('/full',{method:'POST',headers:{'Content-Type':'application/json'},
+      const r = await fetch('/full',{
+        method:'POST', headers:{'Content-Type':'application/json'},
         body: JSON.stringify({question, image_url, upload})
       });
       const j = await r.json();
@@ -147,5 +170,6 @@
   </script>
 </body>
 </html>
+
 
 
