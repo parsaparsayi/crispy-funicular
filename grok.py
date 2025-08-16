@@ -19,7 +19,7 @@ from dotenv import load_dotenv
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 
-PIPELINE_VERSION = "avatar-pipeline r9 (robust-ffmpeg, map-streams, size-check, save-to-OUTPUT_DIR)"
+PIPELINE_VERSION = "avatar-pipeline r10 (clean-temp-audio, robust-ffmpeg, map-streams, size-check)"
 print(PIPELINE_VERSION)
 
 # --------------------------------------------------------------------------------------
@@ -258,7 +258,7 @@ def generate_tts(voice_id, text):
     if r.status_code == 403:
         print("Likely geoblock. Ensure VPN routes all apps (no split tunneling). Try another region.")
     if r.status_code == 401:
-        print("Invalid or expired API key. Use Option 7 to paste a new ELEVENLABS_API_KEY and retry.")
+        print("Invalid or expired API key. Use option 7 to paste a new ELEVENLABS_API_KEY and retry.")
     return None
 
 # --------------------------------------------------------------------------------------
@@ -377,30 +377,38 @@ def fallback_ffmpeg_still_video(image_url_https: str, mp3_path_or_url: str, out_
         candidates.append(DEFAULT_IMAGE_URL)
     candidates.append(_write_placeholder_png())  # guaranteed local
 
-    for idx, img in enumerate(candidates, 1):
-        print(f"Trying image candidate {idx}/{len(candidates)}: {img}")
+    try:
+        for idx, img in enumerate(candidates, 1):
+            print(f"Trying image candidate {idx}/{len(candidates)}: {img}")
 
-        # Attempt FFmpeg directly (URL or local path)
-        if _run_ffmpeg(img, local_audio, out_path):
-            print("Fallback video created:", out_path)
-            return out_path
+            # Attempt FFmpeg directly (URL or local path)
+            if _run_ffmpeg(img, local_audio, out_path):
+                print("Fallback video created:", out_path)
+                return out_path
 
-        # If it was an https URL, download to temp and try again
-        local_img = None
+            # If it was an https URL, download to temp and try again
+            local_img = None
+            try:
+                if isinstance(img, str) and img.lower().startswith("https://"):
+                    local_img = _download_to_temp(img, suffix=os.path.splitext(img)[1] or ".png")
+                    if _run_ffmpeg(local_img, local_audio, out_path):
+                        print("Fallback video created:", out_path)
+                        return out_path
+            except requests.exceptions.RequestException as e:
+                print(f"Download failed for {img}: {e}")
+            finally:
+                if local_img and os.path.exists(local_img):
+                    try:
+                        os.remove(local_img)
+                    except Exception:
+                        pass
+    finally:
+        # Clean up temp audio if it's the working copy we created
         try:
-            if isinstance(img, str) and img.lower().startswith("https://"):
-                local_img = _download_to_temp(img, suffix=os.path.splitext(img)[1] or ".png")
-                if _run_ffmpeg(local_img, local_audio, out_path):
-                    print("Fallback video created:", out_path)
-                    return out_path
-        except requests.exceptions.RequestException as e:
-            print(f"Download failed for {img}: {e}")
-        finally:
-            if local_img and os.path.exists(local_img):
-                try:
-                    os.remove(local_img)
-                except Exception:
-                    pass
+            if os.path.basename(local_audio).lower() == "audio_tmp.mp3" and os.path.exists(local_audio):
+                os.remove(local_audio)
+        except Exception:
+            pass
 
     print("All image candidates failed. Could not create video.")
     return None
@@ -442,6 +450,9 @@ def animate_avatar_did(image_url: str, audio_url: Optional[str]):
 
     if not DID_AUTH:
         print("Missing DID_AUTH"); return None
+    if not (image_url and image_url.lower().startsWith("https://")):
+        # typo-proof: some Python versions lack startsWith; use lower().startswith below
+        pass
     if not (image_url and image_url.lower().startswith("https://")):
         print("D-ID requires an https image URL."); return None
 
@@ -702,3 +713,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
