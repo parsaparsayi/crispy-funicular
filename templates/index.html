@@ -1,0 +1,132 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"/>
+  <title>Avatar Control Panel</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1"/>
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+  <div class="topbar">
+    <div class="brand">
+      <svg class="flag" viewBox="0 0 7410 3900" aria-hidden="true">
+        <rect width="7410" height="3900" fill="#b22234"/>
+        <g fill="#fff"><rect width="7410" height="300" y="300"/><rect width="7410" height="300" y="900"/>
+          <rect width="7410" height="300" y="1500"/><rect width="7410" height="300" y="2100"/>
+          <rect width="7410" height="300" y="2700"/><rect width="7410" height="300" y="3300"/></g>
+        <rect width="2964" height="2100" fill="#3c3b6e"/>
+      </svg>
+      <h1>Avatar Control Panel</h1>
+    </div>
+  </div>
+
+  <div class="container">
+    <!-- TTS -->
+    <div class="card">
+      <h2>Text-to-Speech</h2>
+      <div class="row"><textarea id="tts_text" rows="4" placeholder="Type text for TTS..."></textarea></div>
+      <div class="row">
+        <label><input type="checkbox" id="tts_upload" checked> Upload MP3 to Release and set as default</label>
+      </div>
+      <div class="row"><button class="btn" onclick="doTTS()">Generate MP3</button></div>
+      <div class="note">Saves as <code>output.mp3</code> next to <code>grok.py</code>.</div>
+    </div>
+
+    <!-- Animate -->
+    <div class="card">
+      <h2>Animate (Image + Audio → MP4)</h2>
+      <div class="row"><input type="text" id="img_url" placeholder="Image URL (https)" value="{{ defaults.image_url }}"></div>
+
+      <div class="row">
+        <label><input type="radio" name="audio_mode" value="default" checked> Use DEFAULT_AUDIO_URL</label>
+      </div>
+      <div class="row">
+        <label><input type="radio" name="audio_mode" value="url"> Use this audio URL:</label>
+      </div>
+      <div class="row"><input type="text" id="aud_url" placeholder="https://... .mp3" value="{{ defaults.audio_url }}"></div>
+      <div class="row">
+        <label><input type="radio" name="audio_mode" value="local"> Use local output.mp3</label>
+      </div>
+
+      <div class="row"><button class="btn" onclick="doAnimate()">Create Video</button></div>
+      <div class="note">Videos are written to <code>{{ defaults.output_dir }}</code>.</div>
+    </div>
+
+    <!-- Full pipeline -->
+    <div class="card">
+      <h2>Full pipeline (Q → A → TTS → Animate)</h2>
+      <div class="row"><input type="text" id="qa_question" placeholder="Ask a question..."></div>
+      <div class="row"><input type="text" id="qa_img" placeholder="Image URL (blank = default)" value=""></div>
+      <div class="row">
+        <label><input type="checkbox" id="qa_upload" checked> Upload MP3 to Release and set as default</label>
+      </div>
+      <div class="row"><button class="btn" onclick="doFull()">Run Full Pipeline</button></div>
+    </div>
+
+    <!-- Recent videos -->
+    <div class="card">
+      <h2>Recent Videos</h2>
+      <div class="videos">
+        {% for v in videos %}
+          <div class="vid">
+            <div class="name">{{ v }}</div>
+            <video controls src="{{ url_for('media', filename=v) }}"></video>
+          </div>
+        {% else %}
+          <div class="note">No videos found in {{ defaults.output_dir }}</div>
+        {% endfor %}
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>Log</h2>
+      <div id="log" class="log">Ready.</div>
+    </div>
+  </div>
+
+  <script>
+    function log(msg){ const el=document.getElementById('log'); el.textContent = (el.textContent?el.textContent+'\n':'') + '• ' + msg; el.scrollTop = el.scrollHeight; }
+
+    async function doTTS(){
+      const text = document.getElementById('tts_text').value.trim();
+      const upload = document.getElementById('tts_upload').checked;
+      if(!text){ log('Enter text first.'); return; }
+      log('TTS…');
+      const r = await fetch('/tts',{method:'POST',headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({text, upload})
+      });
+      const j = await r.json();
+      if(j.ok){ log('TTS OK: ' + (j.uploaded_url || j.mp3)); location.reload(); }
+      else{ log('TTS error: ' + (j.error || 'unknown')); }
+    }
+
+    async function doAnimate(){
+      const image_url = document.getElementById('img_url').value.trim();
+      const mode = [...document.querySelectorAll('input[name=audio_mode]')].find(x=>x.checked).value;
+      const audio_url = (mode==='default') ? '{{ defaults.audio_url }}'
+                     : (mode==='url' ? document.getElementById('aud_url').value.trim() : '');
+      log('Animate…');
+      const r = await fetch('/animate',{method:'POST',headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({image_url, audio_url})
+      });
+      const j = await r.json();
+      if(j.ok){ log('Video OK: ' + (j.basename || j.result)); location.reload(); }
+      else{ log('Animate error.'); }
+    }
+
+    async function doFull(){
+      const question = document.getElementById('qa_question').value.trim();
+      const image_url = document.getElementById('qa_img').value.trim();
+      const upload = document.getElementById('qa_upload').checked;
+      if(!question){ log('Enter a question first.'); return; }
+      log('Full pipeline…');
+      const r = await fetch('/full',{method:'POST',headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({question, image_url, upload})
+      });
+      const j = await r.json();
+      if(j.ok){ log('Full OK: ' + (j.basename || j.result)); location.reload(); }
+      else{ log('Full error: ' + (j.error || 'unknown')); }
+    }
+  </script>
+</body>
+</html>
