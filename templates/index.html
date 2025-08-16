@@ -6,18 +6,26 @@
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
   <meta http-equiv="Cache-Control" content="no-store" />
+  <style>
+    /* Ensure disabled buttons look disabled even if style.css is missing/old */
+    .btn[disabled]{ opacity:.6; cursor:not-allowed; }
+  </style>
 </head>
 <body>
   <div class="topbar">
     <div class="brand">
-      <!-- Simple US flag block -->
+      <!-- simple US flag -->
       <svg class="flag" viewBox="0 0 7410 3900" aria-hidden="true">
         <rect width="7410" height="3900" fill="#b22234"/>
-        <g fill="#fff"><rect width="7410" height="300" y="300"/><rect width="7410" height="300" y="900"/>
-          <rect width="7410" height="300" y="1500"/><rect width="7410" height="300" y="2100"/>
-          <rect width="7410" height="300" y="2700"/><rect width="7410" height="300" y="3300"/></g>
-        <rect width="2964" height="2100" fill="#3c3b6e"/>
-      </svg>
+        <g fill="#fff">
+          <rect width="7410" height="300" y="300"/>
+          <rect width="7410" height="300" y="900"/>
+          <rect width="7410" height="300" y="1500"/>
+          <rect width="7410" height="300" y="2100"/>
+          <rect width="7410" height="300" y="2700"/>
+          <rect width="7410" height="300" y="3300"/>
+        </g>
+      <rect width="2964" height="2100" fill="#3c3b6e"/></svg>
       <h1>Avatar Control Panel</h1>
     </div>
   </div>
@@ -94,10 +102,24 @@
   </div>
 
   <script>
-    function setBusy(b){
-      ['btnTTS','btnAnim','btnFull'].forEach(id=>{
+    function setBusy(which, busy){
+      const ids = ['btnTTS','btnAnim','btnFull'];
+      ids.forEach(id=>{
         const el = document.getElementById(id);
-        if(el){ el.disabled = b; }
+        if(!el) return;
+        if(busy){
+          el.disabled = true;
+          if(id === which){
+            el.dataset.originalText = el.textContent;
+            el.textContent = 'Working…';
+          }
+        }else{
+          el.disabled = false;
+          if(el.dataset.originalText){
+            el.textContent = el.dataset.originalText;
+            delete el.dataset.originalText;
+          }
+        }
       });
     }
     function log(msg){
@@ -119,7 +141,7 @@
       const upload = document.getElementById('tts_upload').checked;
       if(!text){ log('Enter text first.'); return; }
       log('TTS…');
-      setBusy(true);
+      setBusy('btnTTS', true);
       try{
         const r = await fetch('/tts',{
           method:'POST',
@@ -136,7 +158,7 @@
       }catch(e){
         log('TTS error: ' + e.message);
       }finally{
-        setBusy(false);
+        setBusy('btnTTS', false);
       }
     }
 
@@ -146,7 +168,7 @@
       const audio_url = (mode==='default') ? '{{ defaults.audio_url }}'
                        : (mode==='url' ? document.getElementById('aud_url').value.trim() : '');
       log('Animate…');
-      setBusy(true);
+      setBusy('btnAnim', true);
       try{
         const r = await fetch('/animate',{
           method:'POST',
@@ -163,7 +185,7 @@
       }catch(e){
         log('Animate error: ' + e.message);
       }finally{
-        setBusy(false);
+        setBusy('btnAnim', false);
       }
     }
 
@@ -173,7 +195,7 @@
       const upload = document.getElementById('qa_upload').checked;
       if(!question){ log('Enter a question first.'); return; }
       log('Full pipeline…');
-      setBusy(true);
+      setBusy('btnFull', true);
       try{
         const r = await fetch('/full',{
           method:'POST',
@@ -190,12 +212,13 @@
       }catch(e){
         log('Full error: ' + e.message);
       }finally{
-        setBusy(false);
+        setBusy('btnFull', false);
       }
     }
   </script>
 </body>
 </html>
+
 
 
 
