@@ -1,0 +1,59 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"/>
+  <title>Virtual Avatar — Aria Fazlollah</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1"/>
+  <style>
+    body{font-family:system-ui,Segoe UI,Roboto,sans-serif;background:#0f172a;color:#e5e7eb;margin:0}
+    header{display:flex;align-items:center;gap:12px;padding:16px 20px;background:#0b1220;border-bottom:1px solid #19223a}
+    h1{margin:0;font-size:20px}
+    .wrap{max-width:1100px;margin:20px auto;padding:0 16px}
+    .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(320px,1fr));gap:16px}
+    .card{background:#111827;border:1px solid #1f2937;border-radius:14px;padding:12px}
+    video{width:100%;border-radius:10px;background:#000}
+    .flag{width:36px}
+    .note{color:#9ca3af;font-size:14px;margin:8px 0 0}
+    a{color:#93c5fd}
+  </style>
+</head>
+<body>
+  <header>
+    <!-- US flag -->
+    <svg class="flag" viewBox="0 0 7410 3900" aria-hidden="true">
+      <rect width="7410" height="3900" fill="#b22234"/>
+      <g fill="#fff"><rect width="7410" height="300" y="300"/><rect width="7410" height="300" y="900"/>
+        <rect width="7410" height="300" y="1500"/><rect width="7410" height="300" y="2100"/>
+        <rect width="7410" height="300" y="2700"/><rect width="7410" height="300" y="3300"/></g>
+      <rect width="2964" height="2100" fill="#3c3b6e"/>
+    </svg>
+    <h1>Virtual Avatar — Aria Fazlollah</h1>
+  </header>
+
+  <div class="wrap">
+    <p class="note">
+      Below are four short demo clips (English & Persian, Intro & Q&amp;A).
+      Source code: <a href="https://github.com/parsaparsayi/crispy-funicular">GitHub repository</a>.
+    </p>
+
+    <div class="grid">
+      <div class="card">
+        <div>English — Intro</div>
+        <video controls src="https://github.com/parsaparsayi/crispy-funicular/releases/download/v1/2025-08-16_AriaFazlollah_Intro_EN_v1.mp4"></video>
+      </div>
+      <div class="card">
+        <div>English — Q&amp;A</div>
+        <video controls src="https://github.com/parsaparsayi/crispy-funicular/releases/download/v1/2025-08-16_AriaFazlollah_Dynamic_QA_v1.mp4"></video>
+      </div>
+      <div class="card">
+        <div>Persian — Intro</div>
+        <video controls src="https://github.com/parsaparsayi/crispy-funicular/releases/download/v1/2025-08-16_AriaFazlollah_Intro_FA_v1.mp4"></video>
+      </div>
+      <div class="card">
+        <div>Persian — Q&amp;A</div>
+        <video controls src="https://github.com/parsaparsayi/crispy-funicular/releases/download/v1/2025-08-16_AriaFazlollah_Dynamic_QA_FA_v1.mp4"></video>
+      </div>
+    </div>
+  </div>
+</body>
+</html>
