@@ -5,15 +5,18 @@
   <title>Avatar Control Panel</title>
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+  <link rel="icon" href="{{ url_for('static', filename='favicon.ico') }}">
 </head>
 <body>
   <div class="topbar">
     <div class="brand">
       <svg class="flag" viewBox="0 0 7410 3900" aria-hidden="true">
         <rect width="7410" height="3900" fill="#b22234"/>
-        <g fill="#fff"><rect width="7410" height="300" y="300"/><rect width="7410" height="300" y="900"/>
+        <g fill="#fff">
+          <rect width="7410" height="300" y="300"/><rect width="7410" height="300" y="900"/>
           <rect width="7410" height="300" y="1500"/><rect width="7410" height="300" y="2100"/>
-          <rect width="7410" height="300" y="2700"/><rect width="7410" height="300" y="3300"/></g>
+          <rect width="7410" height="300" y="2700"/><rect width="7410" height="300" y="3300"/>
+        </g>
         <rect width="2964" height="2100" fill="#3c3b6e"/>
       </svg>
       <h1>Avatar Control Panel</h1>
@@ -35,8 +38,10 @@
     <!-- Animate -->
     <div class="card">
       <h2>Animate (Image + Audio → MP4)</h2>
+      <div class="note" style="margin-bottom:6px;">Image URL is always used regardless of audio option.</div>
       <div class="row"><input type="text" id="img_url" placeholder="Image URL (https)" value="{{ defaults.image_url }}"></div>
 
+      <div class="note" style="margin-top:6px; margin-bottom:4px;">Audio source (choose one):</div>
       <div class="row">
         <label><input type="radio" name="audio_mode" value="default" checked> Use DEFAULT_AUDIO_URL</label>
       </div>
@@ -85,7 +90,15 @@
   </div>
 
   <script>
-    function log(msg){ const el=document.getElementById('log'); el.textContent = (el.textContent?el.textContent+'\n':'') + '• ' + msg; el.scrollTop = el.scrollHeight; }
+    function log(msg){ const el=document.getElementById('log'); el.textContent=(el.textContent?el.textContent+'\n':'')+'• '+msg; el.scrollTop=el.scrollHeight; }
+
+    function updateAudioInputs(){
+      const mode = document.querySelector('input[name=audio_mode]:checked').value;
+      const urlBox = document.getElementById('aud_url');
+      urlBox.disabled = (mode !== 'url'); // editable only in URL mode
+    }
+    document.querySelectorAll('input[name=audio_mode]').forEach(r => r.addEventListener('change', updateAudioInputs));
+    window.addEventListener('DOMContentLoaded', updateAudioInputs);
 
     async function doTTS(){
       const text = document.getElementById('tts_text').value.trim();
@@ -110,8 +123,12 @@
         body: JSON.stringify({image_url, audio_url})
       });
       const j = await r.json();
-      if(j.ok){ log('Video OK: ' + (j.basename || j.result)); location.reload(); }
-      else{ log('Animate error.'); }
+      if(j.ok){
+        log('Video OK: ' + (j.basename || j.result));
+        location.reload();
+      } else {
+        log('Animate error: ' + (j.error || 'unknown'));
+      }
     }
 
     async function doFull(){
@@ -130,3 +147,4 @@
   </script>
 </body>
 </html>
+
