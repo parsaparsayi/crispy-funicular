@@ -1,0 +1,17 @@
+# Secrets
+.env
+.env.local
+
+# Python env & caches
+.venv/
+__pycache__/
+*.pyc
+
+# Local media/artifacts
+*.mp3
+*.mp4
+*.part
+
+# OS/editor junk
+.DS_Store
+Thumbs.db
