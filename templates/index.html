@@ -6,6 +6,27 @@
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
   <link rel="icon" href="{{ url_for('static', filename='favicon.ico') }}">
+  <style>
+    /* small fallback if style.css missing */
+    body{font-family:system-ui,-apple-system,Segoe UI,Roboto,Ubuntu,sans-serif;margin:0;background:#0b1020;color:#e8eefc}
+    .topbar{background:#121a35;border-bottom:1px solid #1f2a4a;padding:10px 16px}
+    .brand{display:flex;align-items:center;gap:12px}
+    .flag{width:28px;height:20px;border:1px solid #222;box-shadow:0 0 0 1px rgba(0,0,0,.25)}
+    .container{max-width:1100px;margin:20px auto;padding:0 16px;display:grid;grid-template-columns:1fr 1fr;gap:16px}
+    .card{background:#111a34;border:1px solid #1c2850;border-radius:12px;padding:14px}
+    .row{display:flex;gap:10px;align-items:center;margin:8px 0}
+    textarea,input[type="text"]{width:100%;padding:10px;border-radius:8px;border:1px solid #2a3b70;background:#0e1630;color:#e8eefc}
+    .btn{background:#2a5bd7;border:none;color:#fff;padding:10px 14px;border-radius:10px;cursor:pointer}
+    .btn[disabled]{opacity:.6;cursor:wait}
+    .note{color:#9fb4ff;font-size:.9rem}
+    .videos{display:grid;grid-template-columns:1fr;gap:10px}
+    .vid{background:#0e1630;border:1px solid #1e2b56;border-radius:10px;padding:8px}
+    .name{font-size:.9rem;margin-bottom:6px;color:#b8c7ff}
+    video{width:100%;border-radius:10px;outline:none;background:#000}
+    .status{font-size:.9rem;color:#b8c7ff;margin:6px 0 0 0}
+    @media (min-width:980px){ .videos{grid-template-columns:1fr 1fr} }
+    .log{white-space:pre-wrap;background:#0e1630;border:1px solid #1e2b56;border-radius:10px;padding:10px;height:200px;overflow:auto}
+  </style>
 </head>
 <body>
   <div class="topbar">
@@ -28,12 +49,19 @@
     <!-- TTS -->
     <div class="card">
       <h2>Text-to-Speech</h2>
-      <div class="row"><textarea id="tts_text" rows="4" placeholder="Type text for TTS..."></textarea></div>
+      <div class="row"><textarea id="ttsText" rows="4" placeholder="Type text for TTS..."></textarea></div>
       <div class="row">
-        <label><input type="checkbox" id="tts_upload" checked> Upload MP3 to Release and set as default</label>
+        <label><input type="checkbox" id="ttsUpload" checked> Upload MP3 to Release and set as default</label>
       </div>
-      <div class="row"><button class="btn" onclick="doTTS()">Generate MP3</button></div>
+      <div class="row"><button id="ttsBtn" class="btn" type="button">Generate MP3</button></div>
       <div class="note">Saves as <code>output.mp3</code> next to <code>grok.py</code>.</div>
+      <div class="status">Current default audio: 
+        {% if defaults.audio_url %}
+          <a href="{{ defaults.audio_url }}" target="_blank" rel="noopener">{{ defaults.audio_url }}</a>
+        {% else %}
+          (none)
+        {% endif %}
+      </div>
     </div>
 
     <!-- Animate -->
@@ -41,33 +69,45 @@
       <h2>Animate (Image + Audio → MP4)</h2>
 
       <div class="note" style="margin-bottom:6px;">Image URL is always used.</div>
-      <div class="row"><input type="text" id="img_url" placeholder="Image URL (https)" value="{{ defaults.image_url }}"></div>
-
-      <div class="note" style="margin-top:8px;">Audio source (you may keep Default checked while forcing Local):</div>
       <div class="row">
-        <label><input type="checkbox" id="aud_use_default" checked> Use DEFAULT_AUDIO_URL</label>
-      </div>
-      <div class="row">
-        <label for="aud_url" style="margin-right:8px;">Or custom audio URL:</label>
-        <input type="text" id="aud_url" placeholder="https://... .mp3" value="{{ defaults.audio_url }}" style="flex:1;">
-      </div>
-      <div class="row">
-        <label><input type="checkbox" id="aud_use_local"> Use local output.mp3</label>
+        <input type="text" id="animImage" placeholder="Image URL (https)" value="{{ defaults.image_url }}">
       </div>
 
-      <div class="row"><button class="btn" onclick="doAnimate()">Create Video</button></div>
+      <div class="note" style="margin-top:8px;">Audio source (precedence: Local → Custom URL → Default):</div>
+      <div class="row">
+        <label><input type="checkbox" id="animUseDefault" checked> Use DEFAULT_AUDIO_URL</label>
+      </div>
+      <div class="row">
+        <label for="animCustomAudio" style="margin-right:8px;">Or custom audio URL:</label>
+        <input type="text" id="animCustomAudio" placeholder="https://... .mp3" value="{{ defaults.audio_url }}" style="flex:1;">
+      </div>
+      <div class="row">
+        <label><input type="checkbox" id="animUseLocal"> Use local output.mp3</label>
+      </div>
+
+      <!-- keep the default value available even if inputs are cleared -->
+      <input type="hidden" id="animDefaultVal" value="{{ defaults.audio_url }}"/>
+
+      <div class="row"><button id="animBtn" class="btn" type="button">Create Video</button></div>
       <div class="note">Videos are written to <code>{{ defaults.output_dir }}</code>.</div>
+      <div class="status">Default image: 
+        {% if defaults.image_url %}
+          <a href="{{ defaults.image_url }}" target="_blank" rel="noopener">{{ defaults.image_url }}</a>
+        {% else %}
+          (none)
+        {% endif %}
+      </div>
     </div>
 
     <!-- Full pipeline -->
     <div class="card">
       <h2>Full pipeline (Q → A → TTS → Animate)</h2>
-      <div class="row"><input type="text" id="qa_question" placeholder="Ask a question..."></div>
-      <div class="row"><input type="text" id="qa_img" placeholder="Image URL (blank = default)" value=""></div>
+      <div class="row"><input type="text" id="fullQuestion" placeholder="Ask a question..."></div>
+      <div class="row"><input type="text" id="fullImage" placeholder="Image URL (blank = default)" value=""></div>
       <div class="row">
-        <label><input type="checkbox" id="qa_upload" checked> Upload MP3 to Release and set as default</label>
+        <label><input type="checkbox" id="fullUpload" checked> Upload MP3 to Release and set as default</label>
       </div>
-      <div class="row"><button class="btn" onclick="doFull()">Run Full Pipeline</button></div>
+      <div class="row"><button id="fullBtn" class="btn" type="button">Run Full Pipeline</button></div>
     </div>
 
     <!-- Recent videos -->
@@ -92,84 +132,126 @@
   </div>
 
   <script>
+    // ------- helpers -------
+    const $ = (sel)=>document.querySelector(sel);
     function log(msg){
-      const el=document.getElementById('log');
-      el.textContent=(el.textContent?el.textContent+'\n':'')+'• '+msg;
-      el.scrollTop=el.scrollHeight;
+      const el=$("#log");
+      const line=document.createElement("div");
+      line.textContent = (typeof msg === "string") ? "• " + msg : "• " + JSON.stringify(msg);
+      el.append(line);
+      el.scrollTop = el.scrollHeight;
+    }
+    function setBusy(btn, busy){
+      if(!btn) return;
+      btn.disabled = !!busy;
+      btn.dataset.originalText ??= btn.textContent;
+      btn.textContent = busy ? "Working…" : btn.dataset.originalText;
     }
 
+    // keep custom URL editable only when not using local
     function updateAudioInputs(){
-      const useLocal = document.getElementById('aud_use_local').checked;
-      const urlBox   = document.getElementById('aud_url');
-      // If using local MP3, custom URL is irrelevant and disabled
-      urlBox.disabled = useLocal;
+      const useLocal = $("#animUseLocal").checked;
+      $("#animCustomAudio").disabled = useLocal;
     }
-    document.getElementById('aud_use_local').addEventListener('change', updateAudioInputs);
-    window.addEventListener('DOMContentLoaded', updateAudioInputs);
 
+    // ------- TTS -------
     async function doTTS(){
-      const text = document.getElementById('tts_text').value.trim();
-      const upload = document.getElementById('tts_upload').checked;
-      if(!text){ log('Enter text first.'); return; }
-      log('TTS…');
-      const r = await fetch('/tts',{
-        method:'POST', headers:{'Content-Type':'application/json'},
-        body: JSON.stringify({text, upload})
-      });
-      const j = await r.json();
-      if(j.ok){ log('TTS OK: ' + (j.uploaded_url || j.mp3)); location.reload(); }
-      else{ log('TTS error: ' + (j.error || 'unknown')); }
+      const btn = $("#ttsBtn");
+      const text = $("#ttsText").value.trim();
+      const upload = $("#ttsUpload").checked;
+      if(!text){ log("Enter text first."); return; }
+      try{
+        setBusy(btn, true);
+        const r = await fetch("/tts",{
+          method:"POST",
+          headers:{"Content-Type":"application/json"},
+          body: JSON.stringify({ text, upload })
+        });
+        const j = await r.json().catch(()=>({ok:false,error:"Bad JSON from server"}));
+        if(!r.ok || !j.ok){ log("TTS error: " + (j.error||r.status)); return; }
+        if(j.uploaded_url){
+          log("TTS OK: " + j.uploaded_url);
+          setTimeout(()=>location.reload(), 400);
+        }else{
+          log("TTS OK: " + j.mp3);
+        }
+      }catch(e){ log("TTS exception: " + e); }
+      finally{ setBusy(btn, false); }
     }
 
+    // ------- Animate -------
     async function doAnimate(){
-      const image_url = document.getElementById('img_url').value.trim();
-      const useDefault = document.getElementById('aud_use_default').checked;
-      const useLocal   = document.getElementById('aud_use_local').checked;
-      const custom     = document.getElementById('aud_url').value.trim();
-
-      // precedence: local > custom URL > default
-      let audio_url = '';
-      if (useLocal) {
-        audio_url = '';                 // empty signals "use local output.mp3" to the server
-      } else if (custom) {
-        audio_url = custom;
-      } else if (useDefault) {
-        audio_url = '{{ defaults.audio_url }}';
-      } else {
-        audio_url = '{{ defaults.audio_url }}'; // safe fallback
-      }
-
-      log('Animate…');
-      const r = await fetch('/animate',{
-        method:'POST', headers:{'Content-Type':'application/json'},
-        body: JSON.stringify({image_url, audio_url})
-      });
-      const j = await r.json();
-      if(j.ok){
-        log('Video OK: ' + (j.basename || j.result));
-        location.reload();
-      } else {
-        log('Animate error: ' + (j.error || 'unknown'));
-      }
+      const btn = $("#animBtn");
+      const image_url = $("#animImage").value.trim();
+      const useDefault = $("#animUseDefault").checked;
+      const useLocal   = $("#animUseLocal").checked;
+      let audio_url    = $("#animCustomAudio").value.trim();
+      // precedence: local → custom → default (no need to uncheck any box)
+      if(useLocal){ audio_url = ""; }
+      else if(!audio_url && useDefault){ audio_url = $("#animDefaultVal").value.trim(); }
+      try{
+        setBusy(btn, true);
+        const r = await fetch("/animate",{
+          method:"POST",
+          headers:{"Content-Type":"application/json"},
+          body: JSON.stringify({ image_url, audio_url })
+        });
+        const j = await r.json().catch(()=>({ok:false,error:"Bad JSON from server"}));
+        if(!r.ok || !j.ok){ log("Animate error: " + (j.error||r.status)); return; }
+        if(j.basename){
+          log("Video OK: " + j.basename);
+          setTimeout(()=>location.reload(), 400);
+        }else if(j.result){
+          log("Video URL: " + j.result);
+        }else{
+          log("Animate returned no result.");
+        }
+      }catch(e){ log("Animate exception: " + e); }
+      finally{ setBusy(btn, false); }
     }
 
+    // ------- Full pipeline -------
     async function doFull(){
-      const question = document.getElementById('qa_question').value.trim();
-      const image_url = document.getElementById('qa_img').value.trim();
-      const upload = document.getElementById('qa_upload').checked;
-      if(!question){ log('Enter a question first.'); return; }
-      log('Full pipeline…');
-      const r = await fetch('/full',{
-        method:'POST', headers:{'Content-Type':'application/json'},
-        body: JSON.stringify({question, image_url, upload})
-      });
-      const j = await r.json();
-      if(j.ok){ log('Full OK: ' + (j.basename || j.result)); location.reload(); }
-      else{ log('Full error: ' + (j.error || 'unknown')); }
+      const btn = $("#fullBtn");
+      const question = $("#fullQuestion").value.trim();
+      const image_url = $("#fullImage").value.trim();
+      const upload = $("#fullUpload").checked;
+      if(!question){ log("Enter a question first."); return; }
+      try{
+        setBusy(btn, true);
+        const r = await fetch("/full",{
+          method:"POST",
+          headers:{"Content-Type":"application/json"},
+          body: JSON.stringify({ question, image_url, upload })
+        });
+        const j = await r.json().catch(()=>({ok:false,error:"Bad JSON from server"}));
+        if(!r.ok || !j.ok){ log("Full error: " + (j.error||r.status)); return; }
+        if(j.answer){ log("Answer: " + j.answer.slice(0,140) + (j.answer.length>140?"…":"")); }
+        if(j.basename){
+          log("Video OK: " + j.basename);
+          setTimeout(()=>location.reload(), 400);
+        }else if(j.result){
+          log("Video URL: " + j.result);
+        }else{
+          log("Full returned no result.");
+        }
+      }catch(e){ log("Full exception: " + e); }
+      finally{ setBusy(btn, false); }
     }
+
+    // bind once ready
+    window.addEventListener("DOMContentLoaded", ()=>{
+      $("#ttsBtn")?.addEventListener("click", doTTS);
+      $("#animBtn")?.addEventListener("click", doAnimate);
+      $("#fullBtn")?.addEventListener("click", doFull);
+      $("#animUseLocal")?.addEventListener("change", updateAudioInputs);
+      updateAudioInputs();
+      log("Ready.");
+    });
   </script>
 </body>
 </html>
+
 
 
 
