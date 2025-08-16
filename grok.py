@@ -1,9 +1,15 @@
 # grok.py
-# Virtual avatar pipeline:
-# - Persona chat via Groq (optional)
-# - TTS via ElevenLabs (saves output.mp3 next to this file)
-# - Animation via D-ID (or local FFmpeg still-image fallback)
-# - Optional: upload output.mp3 to a GitHub release and reuse its public URL
+"""
+Virtual avatar pipeline
+- Persona chat via Groq
+- TTS via ElevenLabs (writes output.mp3 next to this file)
+- Animation via D-ID (or local FFmpeg still-image fallback)
+- Optional: upload output.mp3 to a GitHub Release to get a public HTTPS .mp3
+
+Notes:
+- Comments are written plainly, meant for humans reading the code.
+- No emojis or marketing banners; print only what helps during development.
+"""
 
 import os
 import time
@@ -11,39 +17,37 @@ import base64
 import requests
 import subprocess
 import tempfile
-import platform
 import shutil
 from datetime import datetime
 from dotenv import load_dotenv
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
 
-PIPELINE_VERSION = "avatar-pipeline r9 (startswith fix, local D-ID save, sturdier fallbacks)"
-print(PIPELINE_VERSION)
+__version__ = "r9-clean"
 
-# ------------------------------ Environment & Paths ------------------------------
+# --------------------------------------------------------------------
+# Environment & paths
+# --------------------------------------------------------------------
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 ENV_PATH = os.path.join(BASE_DIR, ".env")
 
-print("Running file:", os.path.abspath(__file__))
-print("Working dir :", os.getcwd())
-
 if os.path.exists(ENV_PATH):
     load_dotenv(ENV_PATH, override=True)
-    print(f".env loaded from {ENV_PATH}")
 else:
-    print(f"No .env file found in {BASE_DIR}")
+    print(f"Warning: .env not found in {BASE_DIR}")
 
-# Output dir (use a short path on Windows to avoid MAX_PATH issues)
+# Use a short output directory on Windows to avoid long path issues.
 OUTPUT_DIR = os.getenv("OUTPUT_DIR", tempfile.gettempdir())
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 
 VOICE_ID_PATH     = os.path.join(BASE_DIR, "voice_id.txt")
-OUTPUT_MP3        = os.path.join(BASE_DIR, "output.mp3")  # TTS target (local)
-VOICE_SAMPLE_PATH = os.path.join(BASE_DIR, "voice cloning.mp3")  # sample for cloning
+OUTPUT_MP3        = os.path.join(BASE_DIR, "output.mp3")            # local TTS target
+VOICE_SAMPLE_PATH = os.path.join(BASE_DIR, "voice cloning.mp3")     # sample for cloning
 
-# Required keys
+# Keys / tokens
 GROQ_API_KEY       = os.getenv("GROQ_API_KEY")
 ELEVENLABS_API_KEY = os.getenv("ELEVENLABS_API_KEY")
-DID_AUTH           = os.getenv("DID_AUTH")  # plain "username:password" (script encodes it)
+DID_AUTH           = os.getenv("DID_AUTH")  # plain "username:password" (we Base64-encode it)
 
 # Persona fields
 USER_NAME      = os.getenv("USER_NAME", "Aria Fazlollah")
@@ -51,9 +55,9 @@ USER_BIRTHDATE = os.getenv("USER_BIRTHDATE", "1987-04-29")
 USER_CITY      = os.getenv("USER_CITY", "Tehran, Iran")
 USER_BIO       = os.getenv("USER_BIO", "I’m into AI and plan to master it in a few years.")
 
-# GitHub release config (for public audio hosting)
+# GitHub release config (public audio hosting)
 GITHUB_TOKEN        = os.getenv("GITHUB_TOKEN")
-GITHUB_REPO         = os.getenv("GITHUB_REPO")          # e.g. "owner/repo"
+GITHUB_REPO         = os.getenv("GITHUB_REPO")  # "owner/repo"
 GITHUB_RELEASE_TAG  = os.getenv("GITHUB_RELEASE_TAG", "v1")
 GITHUB_RELEASE_NAME = os.getenv("GITHUB_RELEASE_NAME", GITHUB_RELEASE_TAG)
 GITHUB_ASSET_NAME   = os.getenv("GITHUB_ASSET_NAME", "output.mp3")
@@ -63,28 +67,25 @@ def _mask(k: str):
         return None
     return k[:10] + "..." if len(k) > 13 else "***"
 
-print("GROQ_API_KEY:", _mask(GROQ_API_KEY))
-print("ELEVENLABS_API_KEY:", _mask(ELEVENLABS_API_KEY))
-print("DID_AUTH set:", bool(DID_AUTH))
+print("Keys loaded:",
+      "GROQ_API_KEY:", _mask(GROQ_API_KEY),
+      "ELEVENLABS_API_KEY:", _mask(ELEVENLABS_API_KEY),
+      "DID_AUTH set:", bool(DID_AUTH))
 
-# Defaults controlled by .env
+# Defaults (override via .env)
 def _env_default_audio():
-    return os.getenv(
-        "DEFAULT_AUDIO_URL",
-        "https://github.com/parsaparsayi/crispy-funicular/releases/download/v1/output.mp3"
-    )
+    return os.getenv("DEFAULT_AUDIO_URL", "")
 
 def _env_default_image():
-    # Prefer hosting your own image (e.g., release asset). Fallback is a public placeholder.
-    return os.getenv("DEFAULT_IMAGE_URL", "https://raw.githubusercontent.com/github/explore/main/topics/python/python.png")
+    return os.getenv("DEFAULT_IMAGE_URL", "")
 
 DEFAULT_IMAGE_URL = _env_default_image()
 DEFAULT_AUDIO_URL = _env_default_audio()
 
 def show_defaults():
-    print(f"Output directory           : {OUTPUT_DIR}")
-    print(f"Current default image URL  : {DEFAULT_IMAGE_URL}")
-    print(f"Current default audio URL  : {DEFAULT_AUDIO_URL}")
+    print("Output directory          :", OUTPUT_DIR)
+    print("Default image URL         :", DEFAULT_IMAGE_URL or "(none)")
+    print("Default audio URL         :", DEFAULT_AUDIO_URL or "(none)")
 
 def update_default_audio_url_runtime(new_url: str):
     """Update in-memory default audio URL after a successful upload."""
@@ -92,23 +93,20 @@ def update_default_audio_url_runtime(new_url: str):
     if new_url and new_url.lower().startswith("https://") and new_url.lower().endswith(".mp3"):
         DEFAULT_AUDIO_URL = new_url
         print("Default audio URL updated:", DEFAULT_AUDIO_URL)
-    else:
-        print("Provided URL is not a valid https .mp3. Keeping previous default.")
 
-# ------------------------------ HTTP session with retry ------------------------------
-from requests.adapters import HTTPAdapter
-from urllib3.util.retry import Retry
-
+# --------------------------------------------------------------------
+# HTTP session with retry
+# --------------------------------------------------------------------
 def vpn_session():
     """
-    Requests session with retry policy.
-    trust_env=False ignores system proxies (useful if routing through a VPN client).
-    User-Agent is descriptive to satisfy strict hosts (e.g., Wikimedia).
+    Requests session with a modest retry policy.
+    trust_env=False avoids system proxies that sometimes fight with VPN clients.
+    User-Agent is kept simple and not misleading.
     """
     s = requests.Session()
     s.trust_env = False
     s.headers.update({
-        "User-Agent": "virtual-avatar-pipeline/1.0 (+contact: example@example.com)",
+        "User-Agent": "avatar-tool/0.1",
         "Accept": "application/json, */*;q=0.5"
     })
     retry = Retry(
@@ -120,30 +118,32 @@ def vpn_session():
     s.mount("https://", HTTPAdapter(max_retries=retry))
     return s
 
-# ------------------------------ Helpers ------------------------------
+# --------------------------------------------------------------------
+# Helpers
+# --------------------------------------------------------------------
 def load_voice_id():
     if os.path.exists(VOICE_ID_PATH):
         vid = open(VOICE_ID_PATH, "r", encoding="utf-8").read().strip()
-        print(f"voice_id loaded: {vid}")
+        print("voice_id:", vid)
         return vid
-    print(f"voice_id.txt not found at {VOICE_ID_PATH}. Use option 6 to clone or write a voice_id there.")
+    print(f"voice_id.txt not found at {VOICE_ID_PATH}.")
     return None
 
 def set_elevenlabs_key_runtime(new_key: str):
-    """Allow runtime override of ELEVENLABS_API_KEY."""
+    """Allow runtime override of ELEVENLABS_API_KEY (useful during testing)."""
     global ELEVENLABS_API_KEY
     new_key = (new_key or "").strip()
     if new_key:
         ELEVENLABS_API_KEY = new_key
         os.environ["ELEVENLABS_API_KEY"] = new_key
         print("ELEVENLABS_API_KEY updated for this run.")
-    else:
-        print("Empty key ignored.")
 
 def _timestamp():
     return datetime.now().strftime("%Y%m%d_%H%M%S")
 
-# ------------------------------ Phase 1: Voice cloning (ElevenLabs) ------------------------------
+# --------------------------------------------------------------------
+# Phase 1: Voice cloning (ElevenLabs)
+# --------------------------------------------------------------------
 def clone_voice(name="MyVoice"):
     if not ELEVENLABS_API_KEY:
         print("Missing ELEVENLABS_API_KEY")
@@ -160,7 +160,7 @@ def clone_voice(name="MyVoice"):
     try:
         r = s.post(url, headers={"xi-api-key": ELEVENLABS_API_KEY}, data=data, files=files, timeout=90)
     except requests.exceptions.SSLError as e:
-        print("TLS/VPN error reaching ElevenLabs. Try a different VPN location or disable split tunneling.")
+        print("TLS/VPN error reaching ElevenLabs.")
         print(e)
         return None
     except requests.exceptions.RequestException as e:
@@ -170,17 +170,15 @@ def clone_voice(name="MyVoice"):
     if r.ok and r.json().get("voice_id"):
         voice_id = r.json()["voice_id"]
         open(VOICE_ID_PATH, "w", encoding="utf-8").write(voice_id)
-        print(f"Voice cloned and saved to {VOICE_ID_PATH}: {voice_id}")
+        print(f"Voice cloned and saved: {voice_id}")
         return voice_id
 
     print("Clone error:", r.status_code, (r.text or "")[:400])
-    if r.status_code == 401 and "missing_permissions" in r.text:
-        print("API key lacks 'voices_write'. Clone in ElevenLabs dashboard and put the voice_id into voice_id.txt.")
-    if r.status_code == 401 and "invalid_api_key" in r.text:
-        print("API key invalid. Use option 7 to paste a fresh key and retry.")
     return None
 
-# ------------------------------ Phase 2: Persona chat (Groq) ------------------------------
+# --------------------------------------------------------------------
+# Phase 2: Persona chat (Groq)
+# --------------------------------------------------------------------
 def build_persona_prompt():
     return f"""
 You are the user's personal voice and persona.
@@ -190,14 +188,12 @@ Your fixed identity:
 - Birthdate: {USER_BIRTHDATE}
 - City: {USER_CITY}
 
-Style & constraints:
+Style:
 - Warm, clear, concise.
-- Do not change name, age, or birthplace. If asked "What is your name?", answer "{USER_NAME}".
-- If asked about your city or origin, answer "{USER_CITY}".
-- Prefer English unless the user uses Persian; match Persian when used.
 - Keep facts consistent with the identity above.
+- Prefer English unless the user uses Persian.
 
-Additional background (non-binding flavor):
+Background (non-binding tone only):
 - {USER_BIO}
 """.strip()
 
@@ -223,7 +219,9 @@ def chat_like_me(prompt):
     )
     return resp.choices[0].message.content
 
-# ------------------------------ Phase 3: TTS (ElevenLabs) ------------------------------
+# --------------------------------------------------------------------
+# Phase 3: TTS (ElevenLabs)
+# --------------------------------------------------------------------
 def generate_tts(voice_id, text):
     if not ELEVENLABS_API_KEY:
         print("Missing ELEVENLABS_API_KEY")
@@ -244,7 +242,7 @@ def generate_tts(voice_id, text):
         r = s.post(url, headers={"xi-api-key": ELEVENLABS_API_KEY, "Content-Type": "application/json"},
                    json=payload, timeout=60)
     except requests.exceptions.SSLError as e:
-        print("TLS/VPN error reaching ElevenLabs. Try another VPN region or disable split tunneling.")
+        print("TLS/VPN error reaching ElevenLabs.")
         print(e)
         return None
     except requests.exceptions.RequestException as e:
@@ -254,19 +252,17 @@ def generate_tts(voice_id, text):
     if r.ok:
         with open(OUTPUT_MP3, "wb") as f:
             f.write(r.content)
-        print(f"Audio saved: {OUTPUT_MP3} ({len(r.content)} bytes)")
+        print(f"TTS audio saved: {OUTPUT_MP3} ({len(r.content)} bytes)")
         return OUTPUT_MP3
 
     print("TTS error:", r.status_code, (r.text or "")[:400])
-    if r.status_code == 403:
-        print("Likely geoblock. Ensure VPN routes all apps (no split tunneling). Try another region.")
-    if r.status_code == 401:
-        print("Invalid or expired API key. Use option 7 to paste a new ELEVENLABS_API_KEY and retry.")
     return None
 
-# ------------------------------ FFmpeg helpers ------------------------------
+# --------------------------------------------------------------------
+# FFmpeg utilities
+# --------------------------------------------------------------------
 _PLACEHOLDER_PNG_B64 = (
-    # tiny 1x1 transparent PNG (base64)
+    # 1x1 transparent PNG (base64)
     "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR4nGMAAQAABQAB"
     "J7n6WQAAAABJRU5ErkJggg=="
 )
@@ -291,9 +287,9 @@ def _download_to_temp(url: str, suffix: str) -> str:
 
 def _ensure_local_audio(mp3_path_or_url: str) -> str:
     """
-    Return a local, short-path MP3 file for FFmpeg.
+    Ensure a short local MP3 path for FFmpeg:
     - If URL: download to OUTPUT_DIR/audio_tmp.mp3
-    - If local path: copy to OUTPUT_DIR/audio_tmp.mp3 (avoids quoting/long-path issues)
+    - If local path: copy to OUTPUT_DIR/audio_tmp.mp3
     """
     target = os.path.join(OUTPUT_DIR, "audio_tmp.mp3")
     try:
@@ -312,15 +308,13 @@ def _ensure_local_audio(mp3_path_or_url: str) -> str:
         raise RuntimeError(f"Could not prepare local audio file: {e}")
 
 def _ffmpeg_output_path(kind: str = "still") -> str:
-    # kind: "still" or "did"
-    ts = _timestamp()
-    name = f"{kind}_{ts}.mp4"
-    return os.path.join(OUTPUT_DIR, name)
+    ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+    return os.path.join(OUTPUT_DIR, f"{kind}_{ts}.mp4")
 
 def _run_ffmpeg(img_in: str, aud_in: str, out_path: str) -> bool:
     """
-    Build FFmpeg args as a list (no shlex) to avoid Windows quoting issues.
-    Also scale to even dimensions for H.264 compatibility.
+    Build FFmpeg args as a list to avoid quoting problems on Windows.
+    Includes scale to even dimensions for H.264 encoders.
     """
     vf = "scale=trunc(iw/2)*2:trunc(ih/2)*2"
     args = [
@@ -347,48 +341,44 @@ def _run_ffmpeg(img_in: str, aud_in: str, out_path: str) -> bool:
     print((p.stderr or "")[:2000])
     return False
 
-# ------------------------------ FFmpeg fallback (image + audio -> mp4) ------------------------------
+# --------------------------------------------------------------------
+# FFmpeg fallback (image + audio -> MP4)
+# --------------------------------------------------------------------
 def fallback_ffmpeg_still_video(image_url_https: str, mp3_path_or_url: str, out_path=None):
     """
-    Create a simple still-image MP4 using FFmpeg.
-    - Writes to OUTPUT_DIR (or temp) to avoid Windows MAX_PATH issues.
-    - Tries URL directly first, then downloads to temp if needed.
-    - Falls back to a tiny local placeholder PNG as last resort.
-    - Ensures audio is a short local file before calling FFmpeg.
-    Returns the local path to the created video or None on failure.
+    Create a simple still-image MP4 with FFmpeg.
+    Tries the provided image URL, then DEFAULT_IMAGE_URL, then a tiny placeholder.
     """
     if out_path is None:
         out_path = _ffmpeg_output_path("still")
 
-    # Ensure audio is local and short
     local_audio = _ensure_local_audio(mp3_path_or_url)
 
-    # Candidate images: requested/default first, then placeholder
     candidates = []
     if image_url_https:
         candidates.append(image_url_https)
     if DEFAULT_IMAGE_URL and DEFAULT_IMAGE_URL not in candidates:
         candidates.append(DEFAULT_IMAGE_URL)
-    candidates.append(_write_placeholder_png())  # guaranteed local
+    candidates.append(_write_placeholder_png())
 
     for idx, img in enumerate(candidates, 1):
-        print(f"Trying image candidate {idx}/{len(candidates)}: {img}")
+        print(f"FFmpeg candidate {idx}/{len(candidates)}: {img}")
 
-        # 1) Try FFmpeg directly with the URL/path
+        # Try FFmpeg directly with the URL/path
         if _run_ffmpeg(img, local_audio, out_path):
-            print("Fallback video created:", out_path)
+            print("Still video:", out_path)
             return out_path
 
-        # 2) If it's an https URL, try downloading then FFmpeg
+        # If it's a URL, try downloading to a temp file
         local_img = None
         try:
             if isinstance(img, str) and img.lower().startswith("https://"):
                 local_img = _download_to_temp(img, suffix=os.path.splitext(img)[1] or ".png")
                 if _run_ffmpeg(local_img, local_audio, out_path):
-                    print("Fallback video created:", out_path)
+                    print("Still video:", out_path)
                     return out_path
         except requests.exceptions.RequestException as e:
-            print(f"Download failed for {img}: {e}")
+            print(f"Image download failed: {e}")
         finally:
             if local_img and os.path.exists(local_img):
                 try:
@@ -396,18 +386,18 @@ def fallback_ffmpeg_still_video(image_url_https: str, mp3_path_or_url: str, out_
                 except Exception:
                     pass
 
-    print("All image candidates failed. Could not create video.")
+    print("Could not create still video.")
     return None
 
-# ------------------------------ Phase 4: D-ID animation ------------------------------
+# --------------------------------------------------------------------
+# D-ID animation
+# --------------------------------------------------------------------
 def _is_https_mp3(u: str) -> bool:
-    """Return True for a public https .mp3 URL."""
     return isinstance(u, str) and u.lower().startswith("https://") and u.lower().endswith(".mp3")
 
 def _save_remote_video(url: str, talk_id: str) -> str | None:
     """
-    Download the remote D-ID video to OUTPUT_DIR so the GUI can show it
-    under 'Recent Videos'. Returns local path or None.
+    Download the remote D-ID video to OUTPUT_DIR so the GUI can show it under "Recent Videos".
     """
     try:
         s = vpn_session()
@@ -421,27 +411,22 @@ def _save_remote_video(url: str, talk_id: str) -> str | None:
         print("D-ID video saved locally:", local_path)
         return local_path
     except Exception as e:
-        print("Could not save remote D-ID video locally:", e)
+        print("Could not save D-ID video locally:", e)
         return None
 
 def animate_avatar_did(image_url, audio_url):
     """
     If audio_url is a public https .mp3, call D-ID and try to save the result locally.
-    Otherwise, if local output.mp3 exists, build a still-image video locally.
-    Returns a local file path (preferred) or a remote video URL (fallback) or None.
+    Otherwise (no https .mp3), if local output.mp3 exists, build a still-image video.
+    Returns a local file path (preferred) or a remote D-ID URL, or None.
     """
-    use_https_mp3 = _is_https_mp3(audio_url)
-
-    if not use_https_mp3:
-        # No usable https .mp3 -> fall back to local still video
+    if not _is_https_mp3(audio_url):
         if os.path.exists(OUTPUT_MP3):
-            print("No valid https .mp3 provided; using local output.mp3 with FFmpeg fallback.")
+            print("No https .mp3; using local output.mp3 with FFmpeg fallback.")
             return fallback_ffmpeg_still_video(image_url or DEFAULT_IMAGE_URL, OUTPUT_MP3)
-        else:
-            print("Need a public https .mp3 URL or a local output.mp3 first (run option 2).")
-            return None
+        print("No https .mp3 and no local output.mp3 found.")
+        return None
 
-    # From here we have a valid https .mp3
     if not DID_AUTH:
         print("Missing DID_AUTH")
         return None
@@ -457,46 +442,46 @@ def animate_avatar_did(image_url, audio_url):
         r = requests.post("https://api.d-id.com/talks", headers=headers, json=payload, timeout=60)
     except requests.exceptions.RequestException as e:
         print("D-ID network error:", e)
-        # Prefer the provided https audio for fallback (downloaded to local before ffmpeg runs)
         return fallback_ffmpeg_still_video(image_url, audio_url)
 
     if r.status_code >= 500:
-        print("D-ID 5xx; using FFmpeg fallback.")
+        print("D-ID server error (5xx); using FFmpeg fallback.")
         return fallback_ffmpeg_still_video(image_url, audio_url)
 
     if not r.ok:
-        print("Create failed:", r.status_code, (r.text or "")[:400])
+        print("D-ID create failed:", r.status_code, (r.text or "")[:400])
         return None
 
     talk_id = r.json().get("id") or r.json().get("talk_id")
-    print("Talk created:", talk_id)
+    print("D-ID talk created:", talk_id)
 
-    # Poll until done or timeout
+    # Poll for completion
     start = time.time()
     while time.time() - start < 240:
         try:
             g = requests.get(f"https://api.d-id.com/talks/{talk_id}", headers=headers, timeout=30)
         except requests.exceptions.RequestException as e:
-            print("Poll error:", e)
+            print("D-ID poll error:", e)
             break
         if g.ok:
             data = g.json()
             status = data.get("status")
             if status == "done":
                 url = data.get("result_url") or data.get("video_url")
-                print("Video ready:", url)
-                # Try to save locally for the GUI list
+                print("D-ID video URL:", url)
                 local = _save_remote_video(url, talk_id)
                 return local or url
             if status in ("error", "failed"):
-                print("Render failed:", data)
+                print("D-ID render failed:", data)
                 return None
         time.sleep(3)
 
-    print("Timed out waiting for D-ID render.")
+    print("D-ID render timed out.")
     return None
 
-# ------------------------------ GitHub release helpers ------------------------------
+# --------------------------------------------------------------------
+# GitHub release helpers
+# --------------------------------------------------------------------
 def _gh_headers():
     if not GITHUB_TOKEN:
         raise RuntimeError("Missing GITHUB_TOKEN in .env")
@@ -508,7 +493,7 @@ def _gh_headers():
 
 def _split_repo(repo: str):
     if not repo or "/" not in repo:
-        raise RuntimeError("GITHUB_REPO must be in the form 'owner/repo'")
+        raise RuntimeError("GITHUB_REPO must be 'owner/repo'")
     owner, name = repo.split("/", 1)
     return owner, name
 
@@ -543,7 +528,7 @@ def upload_asset_to_release(repo: str, release_id: int, asset_path: str, asset_n
     owner, rname = _split_repo(repo)
     s = vpn_session()
 
-    # Remove existing asset with the same name (keeps release list clean)
+    # Remove existing asset with the same name
     assets_url = f"https://api.github.com/repos/{owner}/{rname}/releases/{release_id}/assets"
     assets = s.get(assets_url, headers=_gh_headers(), timeout=30)
     if assets.ok:
@@ -565,16 +550,16 @@ def upload_asset_to_release(repo: str, release_id: int, asset_path: str, asset_n
     return data.get("browser_download_url")
 
 def upload_output_mp3_and_set_default():
-    """Upload local output.mp3 to GitHub and set DEFAULT_AUDIO_URL to the returned public URL."""
+    """Upload local output.mp3 to GitHub Releases and set DEFAULT_AUDIO_URL to the public URL."""
     try:
         if not GITHUB_REPO:
-            print("Missing GITHUB_REPO in .env")
+            print("Missing GITHUB_REPO")
             return None
         if not GITHUB_TOKEN:
-            print("Missing GITHUB_TOKEN in .env (requires release/contents permissions)")
+            print("Missing GITHUB_TOKEN")
             return None
         if not os.path.exists(OUTPUT_MP3):
-            print("No local output.mp3 to upload (run Option 2 first).")
+            print("No local output.mp3 to upload.")
             return None
 
         rid, _upl, _html = ensure_release(GITHUB_REPO, GITHUB_RELEASE_TAG, GITHUB_RELEASE_NAME)
@@ -584,13 +569,15 @@ def upload_output_mp3_and_set_default():
             print("Upload complete. Default audio URL updated.")
             return url
 
-        print("Upload returned an unexpected URL:", url)
+        print("Unexpected upload URL:", url)
         return url
     except Exception as e:
         print("Upload error:", e)
         return None
 
-# ------------------------------ CLI Menu ------------------------------
+# --------------------------------------------------------------------
+# Simple CLI menu (handy for quick tests)
+# --------------------------------------------------------------------
 def main():
     voice_id = load_voice_id()
     print("Using voice_id:", voice_id)
@@ -621,11 +608,10 @@ def main():
                     upload_output_mp3_and_set_default()
 
         elif choice == "3":
-            img = input(f"Image URL (https) [Enter for default: {DEFAULT_IMAGE_URL}]: ").strip() or DEFAULT_IMAGE_URL
-            prompt = f"Audio URL (.mp3, https) [Enter for default: {DEFAULT_AUDIO_URL} or leave blank to use local output.mp3]: "
+            img = input(f"Image URL (https) [Enter for default: {DEFAULT_IMAGE_URL or '(none)'}]: ").strip() or DEFAULT_IMAGE_URL
+            prompt = f"Audio URL (.mp3, https) [Enter for default: {DEFAULT_AUDIO_URL or '(none)'} or leave blank to use local output.mp3]: "
             aud = input(prompt).strip()
             if not aud:
-                # Prefer hosted default; otherwise, local fallback if output.mp3 exists
                 if DEFAULT_AUDIO_URL:
                     aud = DEFAULT_AUDIO_URL
                 elif os.path.exists(OUTPUT_MP3):
@@ -646,8 +632,8 @@ def main():
                 if auto == "y":
                     upload_output_mp3_and_set_default()
 
-            img = input(f"Image URL (https) [Enter for default: {DEFAULT_IMAGE_URL}]: ").strip() or DEFAULT_IMAGE_URL
-            prompt = f"Public https .mp3 URL [Enter for default: {DEFAULT_AUDIO_URL} or leave blank to use local output.mp3]: "
+            img = input(f"Image URL (https) [Enter for default: {DEFAULT_IMAGE_URL or '(none)'}]: ").strip() or DEFAULT_IMAGE_URL
+            prompt = f"Public https .mp3 URL [Enter for default: {DEFAULT_AUDIO_URL or '(none)'} or leave blank to use local output.mp3]: "
             aud_url = input(prompt).strip()
             if not aud_url:
                 aud_url = DEFAULT_AUDIO_URL if DEFAULT_AUDIO_URL else None
@@ -665,8 +651,6 @@ def main():
             v = clone_voice(new_name)
             if v:
                 voice_id = load_voice_id()
-            else:
-                print("Clone did not succeed. You can still use Option 2 (TTS) or Option 7 to paste a new API key.")
 
         elif choice == "7":
             pasted = input("Paste new ELEVENLABS_API_KEY: ").strip()
@@ -680,5 +664,6 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
